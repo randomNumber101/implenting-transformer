@@ -7,6 +7,12 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
+torch = "^2.4.1"
+pytest = "^8.3.3"
+tokenizer = "^3.4.5"
+tokenizers = "^0.20.1"
+transformers = "^4.46.1"
+datasets = "^3.1.0"
 
 
 [build-system]
