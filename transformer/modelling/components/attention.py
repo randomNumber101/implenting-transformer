@@ -47,10 +47,10 @@ class MultiHeadAttention(nn.Module):
         self.dim_values = dim_values if dim_values is not None else dim_model // num_heads
 
         # Shared linear projections
-        self.proj_query = nn.Linear(dim_model, dim_model, bias=False)
-        self.proj_key = nn.Linear(dim_model, dim_model, bias=False)
-        self.proj_value = nn.Linear(dim_model, dim_model, bias=False)
-        self.proj_out = nn.Linear(dim_model, dim_model, bias=False)
+        self.query_transform = nn.Linear(dim_model, dim_model, bias=False)
+        self.key_transform = nn.Linear(dim_model, dim_model, bias=False)
+        self.value_transform = nn.Linear(dim_model, dim_model, bias=False)
+        self.output_transform = nn.Linear(dim_model, dim_model, bias=False)
 
         # Attention mechanism
         self.attention = Attention(mask_future)
@@ -60,9 +60,9 @@ class MultiHeadAttention(nn.Module):
         seq_len_q = query.size(1)
         seq_len_k = key.size(1)
 
-        query = self.proj_query(query).view(batch_size, seq_len_q, self.num_heads, self.dim_keys).transpose(1, 2)
-        key = self.proj_key(key).view(batch_size, seq_len_k, self.num_heads, self.dim_keys).transpose(1, 2)
-        value = self.proj_value(value).view(batch_size, seq_len_k, self.num_heads, self.dim_values).transpose(1, 2)
+        query = self.query_transform(query).view(batch_size, seq_len_q, self.num_heads, self.dim_keys).transpose(1, 2)
+        key = self.key_transform(key).view(batch_size, seq_len_k, self.num_heads, self.dim_keys).transpose(1, 2)
+        value = self.value_transform(value).view(batch_size, seq_len_k, self.num_heads, self.dim_values).transpose(1, 2)
 
         if mask is not None:
             # If (batch_size, seq_len_k)
@@ -85,4 +85,4 @@ class MultiHeadAttention(nn.Module):
 
         # Concatenate heads and project out
         x = x.transpose(1, 2).contiguous().view(batch_size, seq_len_q, self.dim_model)
-        return self.proj_out(x)
+        return self.output_transform(x)

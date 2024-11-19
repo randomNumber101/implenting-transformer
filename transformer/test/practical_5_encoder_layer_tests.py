@@ -7,7 +7,7 @@ import torch
 # Add the parent directory to the system path for importing modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from modelling.functional import BaseTransformerLayer
+from ..modelling.functional.Transformer import BaseTransformerLayer
 
 # Define test data for hidden states and attention masks
 INPUT = torch.tensor([
@@ -87,7 +87,20 @@ def test_layer(layer, input, attention_mask, expected):
     layer.load_state_dict(STATE_DICT)
 
     actual = layer(input, attention_mask)
+
+    print(actual.shape)
+
     # Mask padded positions
     actual *= attention_mask.unsqueeze(-1).float()
+    print()
+    print(actual.shape)
+    print(expected.shape)
+    print("--")
+    print(expected)
+    print(actual)
+    print("--")
+    print(expected - actual)
+    print("Loss:")
+    print(torch.nn.functional.mse_loss(actual, expected).item())
 
     assert torch.allclose(actual, expected)
