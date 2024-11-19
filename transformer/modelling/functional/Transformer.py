@@ -9,8 +9,10 @@ from transformer.modelling.components.attention import MultiHeadAttention
 '''
 Using nn.Layernorm nonetheless, as tests were conducted with nn.Layernorm and there is a small difference (<1e10)
 '''
+
+
 class LayerNorm(nn.Module):
-    def __init__(self, dim_model, eps=1e-6):
+    def __init__(self, dim_model, eps=1e-8):
         super(LayerNorm, self).__init__()
         self.weight = nn.Parameter(torch.ones(dim_model))
         self.bias = nn.Parameter(torch.zeros(dim_model))
