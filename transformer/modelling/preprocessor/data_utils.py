@@ -53,24 +53,19 @@ def train_tokenizer_on_dataset(data, vocab_size=50000):
     corpus = [source for source, _ in data] + [target for _, target in data]
 
     # Initialize and train the CustomBPETokenizer
-    tokenizer = BPETokenizer(vocab_size=50000)
+    tokenizer = BPETokenizer(vocab_size=vocab_size)
     tokenizer.train(corpus)
     return tokenizer
 
 
-def collate_fn(batch, pad_token_id):
-    """
-    Custom collate function to pad sequences in the batch to the same length.
-    """
-
-
+def collate_fn(batch, pad_token_id, max_len=50):
     # Separate source and target sequences
-    source_ids = [item['source_ids'] for item in batch]
-    target_ids = [item['target_ids'] for item in batch]
+    source_ids = [item['source_ids'][:max_len] for item in batch]  # Truncate source
+    target_ids = [item['target_ids'][:max_len] for item in batch]  # Truncate target
 
     # Find maximum length in the batch for both source and target
-    max_source_len = max(len(s) for s in source_ids)
-    max_target_len = max(len(t) for t in target_ids)
+    max_source_len = min(max(len(s) for s in source_ids), max_len)
+    max_target_len = min(max(len(t) for t in target_ids), max_len)
 
     # Pad sequences to max length
     padded_source_ids = [
@@ -89,7 +84,8 @@ def collate_fn(batch, pad_token_id):
     return {'source_ids': source_ids_batch, 'target_ids': target_ids_batch}
 
 
-def create_dataloader(cleaned_data, tokenizer: BPETokenizer, batch_size=16):
+
+def create_dataloader(cleaned_data, tokenizer: BPETokenizer, batch_size=16, max_len=256):
     from .dataloader import CustomTranslationDataset
     # Initialize the CustomTranslationDataset with cleaned data and trained tokenizer
     translation_dataset = CustomTranslationDataset(cleaned_data, tokenizer)
@@ -97,7 +93,7 @@ def create_dataloader(cleaned_data, tokenizer: BPETokenizer, batch_size=16):
     # Create a DataLoader for batch processing
     dataloader = DataLoader(translation_dataset,
                             batch_size=batch_size, shuffle=True,
-                            collate_fn=lambda b: collate_fn(b, tokenizer.get_pad_token_id()))
+                            collate_fn=lambda b: collate_fn(b, tokenizer.get_pad_token_id(), max_len=max_len))
     return dataloader
 
 

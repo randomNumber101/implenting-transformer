@@ -2,9 +2,10 @@ from collections import OrderedDict
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from transformer.modelling.components.attention import MultiHeadAttention
+from transformer.modelling.components.embedding import CombinedEmbedding
+from transformer.modelling.functional.TransformerDecoder import TransformerDecoderLayer
 
 '''
 Using nn.Layernorm nonetheless, as tests were conducted with nn.Layernorm and there is a small difference (<1e10)
@@ -55,3 +56,43 @@ class BaseTransformerLayer(nn.Module):
         x_ff = self.dropout2(self.feature_transformation(x))
         x = self.layer_norm_2(x + x_ff)
         return x
+
+
+class Transformer(nn.Module):
+    def __init__(self, vocab_size, d_model, n_heads, num_encoder_layers, num_decoder_layers,
+                 dim_feedforward, dropout, max_len):
+        super().__init__()
+
+        # Embedding and Positional Encoding
+        self.embedding = CombinedEmbedding(vocab_size, d_model, max_len)
+
+        # Encoder Stack
+        self.encoder_layers = nn.ModuleList([
+            BaseTransformerLayer(input_dim=d_model, num_heads=n_heads, feature_dim=dim_feedforward, dropout=dropout)
+            for _ in range(num_encoder_layers)
+        ])
+
+        # Decoder Stack
+        self.decoder_layers = nn.ModuleList([
+            TransformerDecoderLayer(input_dim=d_model, num_heads=n_heads, feature_dim=dim_feedforward, dropout=dropout)
+            for _ in range(num_decoder_layers)
+        ])
+
+        # Output Projection
+        self.output_layer = nn.Linear(d_model, vocab_size)
+
+    def forward(self, src, tgt, src_mask=None, tgt_mask=None):
+        # Embed and positional encode source
+        src = self.embedding(src)
+        memory = src
+        for layer in self.encoder_layers:
+            memory = layer(memory, attention_mask=src_mask)
+
+        # Embed and decode target
+        tgt = self.embedding(tgt)
+        output = tgt
+        for layer in self.decoder_layers:
+            output = layer(output, memory, encoder_attention_mask=src_mask, attention_mask=tgt_mask)
+
+        # Project to vocabulary
+        return self.output_layer(output)
