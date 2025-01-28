@@ -3,17 +3,26 @@ from torch.utils.data import DataLoader
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
 
+from transformer.modelling.preprocessor.data_utils import train_tokenizer_on_dataset, load_wmt17, create_dataloader, \
+    train_test_split
+from transformer.run.optimizers import initialize_optimizer_and_scheduler
+from utils import TrainingConfig, load_or_create_model, get_model_path
+
 
 def train_epoch(model, dataloader, criterion, optimizer, scheduler, vocab_size):
     model.train()
     total_loss = 0
     for batch in tqdm(dataloader, desc="Training", leave=False):
-        src = batch['source_ids']
-        tgt = batch['target_ids'][:, :-1]  # Exclude last token for input
-        tgt_labels = batch['target_ids'][:, 1:]  # Shifted target for labels
+        src = batch['source_ids'].to(model.device)
+        tgt = batch['target_ids'][:, :-1].to(model.device)  # Exclude last token for input
+        tgt_labels = batch['target_ids'][:, 1:].to(model.device)  # Shifted target for labels
+
+        # Get masks from the batch
+        src_mask = batch['source_mask'].to(model.device)
+        tgt_mask = batch['target_mask'][:, :-1].to(model.device)  # Exclude last token for mask
 
         optimizer.zero_grad()
-        output = model(src, tgt)
+        output = model(src, tgt, src_mask=src_mask, tgt_mask=tgt_mask)
         loss = criterion(output.reshape(-1, vocab_size), tgt_labels.reshape(-1))
         loss.backward()
         optimizer.step()
@@ -29,85 +38,69 @@ def eval_epoch(model, dataloader, criterion, vocab_size):
     total_loss = 0
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", leave=False):
-            src = batch['source_ids']
-            tgt = batch['target_ids'][:, :-1]
-            tgt_labels = batch['target_ids'][:, 1:]
+            src = batch['source_ids'].to(model.device)
+            tgt = batch['target_ids'][:, :-1].to(model.device)
+            tgt_labels = batch['target_ids'][:, 1:].to(model.device)
 
-            output = model(src, tgt)
+            # Get masks from the batch
+            src_mask = batch['source_mask'].to(model.device)
+            tgt_mask = batch['target_mask'][:, :-1].to(model.device)
+
+            output = model(src, tgt, src_mask=src_mask, tgt_mask=tgt_mask)
             loss = criterion(output.reshape(-1, vocab_size), tgt_labels.reshape(-1))
             total_loss += loss.item()
 
     return total_loss / len(dataloader)
 
 
-def train_model(model, train_dataloader, val_dataloader, criterion, optimizer, scheduler, vocab_size, num_epochs):
-    for epoch in range(num_epochs):
-        print(f"Epoch {epoch + 1}/{num_epochs}")
-        train_loss = train_epoch(model, train_dataloader, criterion, optimizer, scheduler, vocab_size)
-        val_loss = eval_epoch(model, val_dataloader, criterion, vocab_size)
+def train_model(config: TrainingConfig):
+    # Load dataset and tokenizer
+    cleaned_data = load_wmt17()
+    tokenizer = train_tokenizer_on_dataset(cleaned_data, vocab_size=config.vocab_size)
+
+    # Create dataloaders
+    data = cleaned_data[:int(config.dataset_portion * len(cleaned_data))]
+    train_data, val_data = train_test_split(data, test_portion=config.validation_portion)
+    train_dataloader = create_dataloader(train_data, tokenizer,
+                                         batch_size=config.batch_size,
+                                         max_len=config.max_len)
+    val_dataloader = create_dataloader(val_data, tokenizer,
+                                       batch_size=config.batch_size,
+                                       max_len=config.max_len)
+
+    # Initialize model
+    model = load_or_create_model(config)
+    model.to(model.device)
+
+    # Initialize training components
+    criterion = CrossEntropyLoss(ignore_index=tokenizer.get_pad_token_id())
+    warmup_steps = int(config.warmup_portion * len(train_dataloader) * config.num_epochs)
+
+    optimizer, scheduler = initialize_optimizer_and_scheduler(
+        model,
+        d_model=config.d_model,
+        warmup_steps=warmup_steps,
+        lr=config.lr,
+        weight_decay=config.weight_decay
+    )
+
+    # Training loop
+    best_val_loss = float('inf')
+    model_path = get_model_path(config)
+
+    for epoch in range(config.num_epochs):
+        print(f"Epoch {epoch + 1}/{config.num_epochs}")
+        train_loss = train_epoch(model, train_dataloader, criterion,
+                                 optimizer, scheduler, config.vocab_size)
+        val_loss = eval_epoch(model, val_dataloader, criterion, config.vocab_size)
         print(f"Train Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), model_path)
+            print(f"Saved best model to {model_path}")
 
 
 if __name__ == "__main__":
-    from transformer.modelling.functional.Transformer import Transformer
-    from transformer.modelling.preprocessor.data_utils import load_wmt17, create_dataloader, train_tokenizer_on_dataset
-    from optimizers import initialize_optimizer_and_scheduler
-
-    # Parameters
-    VOCAB_SIZE = 50000
-    D_MODEL = 64
-    N_HEADS = 4
-    NUM_ENCODER_LAYERS = 2
-    NUM_DECODER_LAYERS = 2
-    DIM_FEEDFORWARD = 128
-    DROPOUT = 0.1
-    MAX_LEN = 128
-    DATASET_PORTION = 0.25
-    BATCH_SIZE = 32
-    NUM_EPOCHS = 5
-    LR = 1e-4
-    WARMUP_STEPS = 4000
-    WEIGHT_DECAY = 0.01
-
-    # Load dataset
-    cleaned_data = load_wmt17()
-    print("Data loaded.")
-
-    # Train tokenizer
-    tokenizer = train_tokenizer_on_dataset(cleaned_data, vocab_size=VOCAB_SIZE)
-    print("Tokenizer trained.")
-
-    # Create dataloaders
-    train_data = cleaned_data[:int(DATASET_PORTION * len(cleaned_data))]
-    val_data = cleaned_data[int(DATASET_PORTION * len(cleaned_data)):]
-    train_dataloader = create_dataloader(train_data, tokenizer, batch_size=BATCH_SIZE, max_len=MAX_LEN)
-    val_dataloader = create_dataloader(val_data, tokenizer, batch_size=BATCH_SIZE, max_len=MAX_LEN)
-
-    # Initialize model
-    model = Transformer(
-        vocab_size=VOCAB_SIZE,
-        d_model=D_MODEL,
-        n_heads=N_HEADS,
-        num_encoder_layers=NUM_ENCODER_LAYERS,
-        num_decoder_layers=NUM_DECODER_LAYERS,
-        dim_feedforward=DIM_FEEDFORWARD,
-        dropout=DROPOUT,
-        max_len=MAX_LEN
-    )
-
-    # Initialize loss, optimizer, and scheduler
-    criterion = CrossEntropyLoss(ignore_index=tokenizer.get_pad_token_id())
-    optimizer, scheduler = initialize_optimizer_and_scheduler(model, d_model=D_MODEL, warmup_steps=WARMUP_STEPS, lr=LR,
-                                                              weight_decay=WEIGHT_DECAY)
-
-    # Train model
-    train_model(
-        model=model,
-        train_dataloader=train_dataloader,
-        val_dataloader=val_dataloader,
-        criterion=criterion,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        vocab_size=VOCAB_SIZE,
-        num_epochs=NUM_EPOCHS
-    )
+    config = TrainingConfig() # Use default params
+    train_model(config)

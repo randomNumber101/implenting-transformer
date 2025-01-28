@@ -5,16 +5,6 @@ from .data_utils import clean_data
 
 class CustomTranslationDataset(Dataset):
     def __init__(self, dataset, tokenizer, min_length=5, max_length=64, max_ratio=1.5):
-        """
-        Custom Dataset for handling translation data, including cleaning and encoding.
-
-        Parameters:
-        - dataset: list of tuples (source, target) from the WMT dataset
-        - tokenizer: instance of CustomBPETokenizer
-        - min_length: Minimum sentence length for filtering
-        - max_length: Maximum sentence length for filtering
-        - max_ratio: Maximum allowable ratio between source and target lengths
-        """
         # Clean and filter the dataset using the clean_data function from data_utils.py
         self.data = clean_data(dataset, min_length=min_length, max_length=max_length, max_ratio=max_ratio)
 
@@ -38,19 +28,20 @@ class CustomTranslationDataset(Dataset):
             'target_ids': torch.tensor(target_ids, dtype=torch.long)
         }
 
-    def collate_fn(batch):
-        """
-        Custom collate function to pad sequences in the batch.
-        """
-        # Extract the pad token ID from one of the dataset items
-        pad_token_id = batch[0]['source_ids'].new_full((1,), batch[0]['source_ids'][0].pad_token_id).item()
 
-        # Separate source and target sequences
-        source_ids = [item['source_ids'] for item in batch]
-        target_ids = [item['target_ids'] for item in batch]
+def collate_fn(batch):
+    """
+    Custom collate function to pad sequences in the batch.
+    """
+    # Extract the pad token ID from one of the dataset items
+    pad_token_id = batch[0]['source_ids'].new_full((1,), batch[0]['source_ids'][0].pad_token_id).item()
 
-        # Pad sequences
-        source_ids = torch.nn.utils.rnn.pad_sequence(source_ids, batch_first=True, padding_value=pad_token_id)
-        target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=pad_token_id)
+    # Separate source and target sequences
+    source_ids = [item['source_ids'] for item in batch]
+    target_ids = [item['target_ids'] for item in batch]
 
-        return {'source_ids': source_ids, 'target_ids': target_ids}
+    # Pad sequences
+    source_ids = torch.nn.utils.rnn.pad_sequence(source_ids, batch_first=True, padding_value=pad_token_id)
+    target_ids = torch.nn.utils.rnn.pad_sequence(target_ids, batch_first=True, padding_value=pad_token_id)
+
+    return {'source_ids': source_ids, 'target_ids': target_ids}

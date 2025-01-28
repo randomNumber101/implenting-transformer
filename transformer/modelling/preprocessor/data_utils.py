@@ -1,8 +1,10 @@
+import random
 import re
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from .tokenizer import BPETokenizer
 import torch
+
 
 def clean_data(data, min_length=5, max_length=64, max_ratio=1.5):
     # Whitelist of allowed characters
@@ -38,9 +40,9 @@ def clean_data(data, min_length=5, max_length=64, max_ratio=1.5):
     return cleaned_data
 
 
-def load_wmt17():
+def load_wmt17(split="train[:1%]") -> list:
     # Load WMT17 German-English dataset from Hugging Face
-    dataset = load_dataset("wmt17", "de-en", split="train[:1%]")  # Using 1% subset for quick testing
+    dataset = load_dataset("wmt17", "de-en", split=split)  # Using 1% subset for quick testing
     data = [(item['translation']['de'], item['translation']['en']) for item in dataset]
 
     # Clean the data using the clean_data function
@@ -48,20 +50,30 @@ def load_wmt17():
     return cleaned_data
 
 
-def train_tokenizer_on_dataset(data, vocab_size=50000):
-    # Extract sentences for tokenizer training (concatenate source and target)
-    corpus = [source for source, _ in data] + [target for _, target in data]
+def tokenize_data(data, tokenizer, max_len=50):
+    """
+    Tokenize data and prepare it for batching.
 
-    # Initialize and train the CustomBPETokenizer
-    tokenizer = BPETokenizer(vocab_size=vocab_size)
-    tokenizer.train(corpus)
-    return tokenizer
+    Parameters:
+        data: List[Tuple[str, str]] - List of (source, target) sentence pairs.
+        tokenizer: BPETokenizer - Trained tokenizer.
+        max_len: int - Maximum length for truncation.
+
+    Returns:
+        List[Dict]: Tokenized data with 'source_ids' and 'target_ids'.
+    """
+    tokenized_data = []
+    for source, target in data:
+        source_ids = tokenizer.encode(source)[:max_len]
+        target_ids = tokenizer.encode(target)[:max_len]
+        tokenized_data.append({'source_ids': source_ids, 'target_ids': target_ids})
+    return tokenized_data
 
 
 def collate_fn(batch, pad_token_id, max_len=50):
     # Separate source and target sequences
-    source_ids = [item['source_ids'][:max_len] for item in batch]  # Truncate source
-    target_ids = [item['target_ids'][:max_len] for item in batch]  # Truncate target
+    source_ids = [torch.tensor(item['source_ids'][:max_len], dtype=torch.long) for item in batch]  # Convert to tensor
+    target_ids = [torch.tensor(item['target_ids'][:max_len], dtype=torch.long) for item in batch]  # Convert to tensor
 
     # Find maximum length in the batch for both source and target
     max_source_len = min(max(len(s) for s in source_ids), max_len)
@@ -77,12 +89,77 @@ def collate_fn(batch, pad_token_id, max_len=50):
         for t in target_ids
     ]
 
+    # Create attention masks for source and target
+    source_mask = [
+        torch.cat([torch.ones(len(s), dtype=torch.long), torch.zeros(max_source_len - len(s), dtype=torch.long)])
+        for s in source_ids
+    ]
+    target_mask = [
+        torch.cat([torch.ones(len(t), dtype=torch.long), torch.zeros(max_target_len - len(t), dtype=torch.long)])
+        for t in target_ids
+    ]
+
     # Stack into a single tensor
     source_ids_batch = torch.stack(padded_source_ids)
     target_ids_batch = torch.stack(padded_target_ids)
+    source_mask_batch = torch.stack(source_mask)
+    target_mask_batch = torch.stack(target_mask)
 
-    return {'source_ids': source_ids_batch, 'target_ids': target_ids_batch}
+    return {
+        'source_ids': source_ids_batch,
+        'target_ids': target_ids_batch,
+        'source_mask': source_mask_batch,
+        'target_mask': target_mask_batch
+    }
 
+
+def prepare_test_data(test_data, tokenizer, max_len=50):
+    """
+    Tokenize and prepare the test data.
+
+    Parameters:
+        test_data: List[Tuple[str, str]] - List of (source, target) sentence pairs.
+        tokenizer: BPETokenizer - Trained tokenizer.
+        max_len: int - Maximum length for truncation.
+
+    Returns:
+        List[Dict]: Tokenized test data with 'source_ids', 'target_ids', 'source_mask', and 'target_mask'.
+    """
+    tokenized_data = []
+    for source, target in test_data:
+        source_ids = tokenizer.encode(source)[:max_len]
+        target_ids = tokenizer.encode(target)[:max_len]
+
+        # Create masks
+        source_mask = [1] * len(source_ids) + [0] * (max_len - len(source_ids))
+        target_mask = [1] * len(target_ids) + [0] * (max_len - len(target_ids))
+
+        # Pad sequences to max_len
+        source_ids = source_ids + [tokenizer.get_pad_token_id()] * (max_len - len(source_ids))
+        target_ids = target_ids + [tokenizer.get_pad_token_id()] * (max_len - len(target_ids))
+
+        tokenized_data.append({
+            'source_ids': torch.tensor(source_ids, dtype=torch.long),
+            'target_ids': torch.tensor(target_ids, dtype=torch.long),
+            'source_mask': torch.tensor(source_mask, dtype=torch.long),
+            'target_mask': torch.tensor(target_mask, dtype=torch.long),
+        })
+
+    return tokenized_data
+
+def train_test_split(data, test_portion=0.3):
+    random.shuffle(data)
+    split_idx = int(len(data) * (1 - test_portion))
+    return data[:split_idx], data[split_idx:]
+
+def train_tokenizer_on_dataset(data, vocab_size=50000) -> BPETokenizer:
+    # Extract sentences for tokenizer training (concatenate source and target)
+    corpus = [source for source, _ in data] + [target for _, target in data]
+
+    # Initialize and train the CustomBPETokenizer
+    tokenizer = BPETokenizer(vocab_size=vocab_size)
+    tokenizer.train(corpus)
+    return tokenizer
 
 
 def create_dataloader(cleaned_data, tokenizer: BPETokenizer, batch_size=16, max_len=256):
@@ -95,5 +172,3 @@ def create_dataloader(cleaned_data, tokenizer: BPETokenizer, batch_size=16, max_
                             batch_size=batch_size, shuffle=True,
                             collate_fn=lambda b: collate_fn(b, tokenizer.get_pad_token_id(), max_len=max_len))
     return dataloader
-
-

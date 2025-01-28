@@ -167,12 +167,10 @@ class BPETokenizer:
                 for line in corpus:
                     f.write(line + "\n")
 
-            # Initialize the BPE tokenizer with the correct settings
             tokenizer = Tokenizer(models.BPE())
             tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
             tokenizer.decoder = decoders.ByteLevel()
 
-            # Set up the trainer with the target vocabulary size, min frequency, and special tokens
             trainer = trainers.BpeTrainer(
                 vocab_size=self.vocab_size,
                 min_frequency=self.min_frequency,
@@ -216,9 +214,9 @@ class BPETokenizer:
         # Encode text using the GPT2-compatible tokenizer
         return self.gpt2_tokenizer.encode(text)
 
-    def decode(self, token_ids):
+    def decode(self, token_ids, **kwargs):
         # Decode token IDs using the GPT2-compatible tokenizer
-        return self.gpt2_tokenizer.decode(token_ids)
+        return self.gpt2_tokenizer.decode(token_ids, **kwargs)
 
     def get_pad_token(self):
         return self.gpt2_tokenizer.pad_token

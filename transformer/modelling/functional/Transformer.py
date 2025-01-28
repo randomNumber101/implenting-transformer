@@ -6,6 +6,7 @@ import torch.nn as nn
 from transformer.modelling.components.attention import MultiHeadAttention
 from transformer.modelling.components.embedding import CombinedEmbedding
 from transformer.modelling.functional.TransformerDecoder import TransformerDecoderLayer
+from transformer.modelling.preprocessor.tokenizer import BPETokenizer
 
 '''
 Using nn.Layernorm nonetheless, as tests were conducted with nn.Layernorm and there is a small difference (<1e10)
@@ -60,7 +61,7 @@ class BaseTransformerLayer(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, vocab_size, d_model, n_heads, num_encoder_layers, num_decoder_layers,
-                 dim_feedforward, dropout, max_len):
+                 dim_feedforward, dropout, max_len, device="cpu"):
         super().__init__()
 
         # Embedding and Positional Encoding
@@ -81,6 +82,8 @@ class Transformer(nn.Module):
         # Output Projection
         self.output_layer = nn.Linear(d_model, vocab_size)
 
+        self.device = device
+
     def forward(self, src, tgt, src_mask=None, tgt_mask=None):
         # Embed and positional encode source
         src = self.embedding(src)
@@ -96,3 +99,39 @@ class Transformer(nn.Module):
 
         # Project to vocabulary
         return self.output_layer(output)
+
+    def generate(self, src, tokenizer: BPETokenizer, max_len=50, src_mask=None):
+        self.eval()
+        start_token_id = tokenizer.gpt2_tokenizer.bos_token_id
+        end_token_id = tokenizer.gpt2_tokenizer.eos_token_id
+
+        # Encode source with source mask
+        src = self.embedding(src)
+        memory = src
+        for layer in self.encoder_layers:
+            memory = layer(memory, attention_mask=src_mask)  # Pass src_mask to the encoder layers
+
+        # Initialize the target sequence with the start token
+        tgt = torch.tensor([[start_token_id]], device=src.device)
+
+        for _ in range(max_len):
+            tgt_emb = self.embedding(tgt)  # Embed the target sequence (includes positional encoding)
+            output = tgt_emb
+            for layer in self.decoder_layers:
+                output = layer(output, memory, encoder_attention_mask=src_mask)
+            logits = self.output_layer(output[:, -1, :])  # Take the last token
+            next_token = logits.argmax(dim=-1)  # Greedy decoding: pick the token with the highest probability
+
+            # Append the predicted token to the target sequence
+            tgt = torch.cat([tgt, next_token.unsqueeze(0)], dim=1)
+
+            # Stop if end-of-sequence token is generated
+            if next_token.item() == end_token_id:
+                break
+
+        return tgt.squeeze(0).tolist()
+
+    def to(self, device):
+        self.device = device
+        return super().to(device)
+
